@@ -23,6 +23,7 @@
   #include "config.h"
 #endif
 #include "DVDVideoCodecExynos5.h"
+#include "DVDVideoCodecExynos.h"
 #include "DVDDemuxers/DVDDemux.h"
 #include "DVDStreamInfo.h"
 #include "DVDClock.h"
@@ -50,6 +51,7 @@
 #include <poll.h>
 #include <sys/mman.h>
 #include <dirent.h>
+#include <optional>
 
 #ifdef CLASSNAME
 #undef CLASSNAME
@@ -79,68 +81,17 @@ CDVDVideoCodecExynos5::~CDVDVideoCodecExynos5() {
 }
 
 bool CDVDVideoCodecExynos5::OpenDevices() {
-  DIR *dir;
-  struct dirent *ent;
-
-  if ((dir = opendir ("/sys/class/video4linux/")) != NULL) {
-    while ((ent = readdir (dir)) != NULL) {
-      if (strncmp(ent->d_name, "video", 5) == 0) {
-        char *p;
-        char name[64];
-        char devname[64];
-        char sysname[64];
-        char drivername[32];
-        char target[1024];
-        int ret;
-
-        snprintf(sysname, 64, "/sys/class/video4linux/%s", ent->d_name);
-        snprintf(name, 64, "/sys/class/video4linux/%s/name", ent->d_name);
-
-        FILE* fp = fopen(name, "r");
-        if (fgets(drivername, 32, fp) != NULL) {
-          p = strchr(drivername, '\n');
-          if (p != NULL)
-            *p = '\0';
-        } else {
-          fclose(fp);
-          continue;
-        }
-        fclose(fp);
-
-        ret = readlink(sysname, target, sizeof(target));
-        if (ret < 0)
-          continue;
-        target[ret] = '\0';
-        p = strrchr(target, '/');
-        if (p == NULL)
-          continue;
-
-        sprintf(devname, "/dev/%s", ++p);
-
-        if (m_iDecoderHandle < 0 && strncmp(drivername, "s5p-mfc-dec", 11) == 0) {
-          struct v4l2_capability cap;
-          int fd = open(devname, O_RDWR | O_NONBLOCK, 0);
-          if (fd > 0) {
-            memzero(cap);
-            ret = ioctl(fd, VIDIOC_QUERYCAP, &cap);
-            if (ret == 0)
-              if ((cap.capabilities & V4L2_CAP_VIDEO_M2M_MPLANE ||
-                ((cap.capabilities & V4L2_CAP_VIDEO_CAPTURE_MPLANE) && (cap.capabilities & V4L2_CAP_VIDEO_OUTPUT_MPLANE))) &&
-                (cap.capabilities & V4L2_CAP_STREAMING)) {
-                m_iDecoderHandle = fd;
-                CLog::Log(LOGDEBUG, "%s::%s - Found %s %s", CLASSNAME, __func__, drivername, devname);
-              }
-          }
-		  if (m_iDecoderHandle < 0)
-            close(fd);
-        }
-        if (m_iDecoderHandle >= 0)
-          return true;
+  m_iDecoderHandle = OpenDevice("s5p-mfc-dec", [](int fd {
+      struct v4l2_capability cap = {};
+      if (!ioctl(fd, VIDIOC_QUERYCAP, &cap)) {
+          return ((cap.capabilities & V4L2_CAP_VIDEO_M2M_MPLANE ||
+            ((cap.capabilities & V4L2_CAP_VIDEO_CAPTURE_MPLANE) && (cap.capabilities & V4L2_CAP_VIDEO_OUTPUT_MPLANE))) &&
+            (cap.capabilities & V4L2_CAP_STREAMING));
+      } else {
+          return false;
       }
-    }
-    closedir (dir);
-  }
-  return false;
+    });
+  return m_iDecoderHandle > 0;
 }
 
 bool CDVDVideoCodecExynos5::SetupOutputFormat(CDVDStreamInfo &hints) {
@@ -513,8 +464,8 @@ int CDVDVideoCodecExynos5::Decode(BYTE* pData, int iSize, double dts, double pts
   }
 
   // Pop pts/dts only when picture is finally ready to be showed up or skipped
-  m_videoBuffer.pts = (ptsTime.tv_sec + double(ptsTime.tv_usec)/1000);//m_timestamps.top().pts; 
-  m_videoBuffer.dts = m_videoBuffer.pts;//m_timestamps.top().dts;
+  m_videoBuffer.pts = (ptsTime.tv_sec + double(ptsTime.tv_usec)/1000); 
+  m_videoBuffer.dts = m_videoBuffer.pts;
     
   // Queue dequeued from FIMC OUPUT frame back to MFC CAPTURE
   if (&m_v4l2MFCCaptureBuffers[index] && !m_v4l2MFCCaptureBuffers[index].bQueue) {

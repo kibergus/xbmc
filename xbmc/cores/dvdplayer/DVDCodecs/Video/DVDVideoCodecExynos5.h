@@ -27,8 +27,6 @@
 #include <linux/LinuxV4l2.h>
 
 #include <string>
-#include <queue>
-#include <list>
 #include "guilib/GraphicContext.h"
 
 #define STREAM_BUFFER_SIZE            786432 //compressed frame size. 1080p mpeg4 10Mb/s can be un to 786k in size, so this is to make sure frame fits into buffer
@@ -62,16 +60,6 @@ public:
   virtual const char* GetName() { return m_name.c_str(); }; // m_name is never changed after open
 
 private:
-  struct Timestamp {
-    Timestamp (double pts, double dts) : pts(pts), dts(dts) {}
-
-    double pts;
-    double dts;
-
-    bool operator< (const Timestamp& other) const {
-      return pts > other.pts; // We want reversed order
-    }
-  };
 
   std::string m_name;
 
