@@ -100,6 +100,7 @@ bool CEGLWrapper::Initialize(const std::string &implementation)
     }
   }
 
+  #if defined(TARGET_HYBRIS)
   if (!ret)                                                                                                                                                                                   
     {                                                                                                                                                                                           
       delete nativeGuess;
@@ -113,6 +114,7 @@ bool CEGLWrapper::Initialize(const std::string &implementation)
       }
     }
   }
+  #endif
 
   if (ret && m_nativeTypes)
     m_nativeTypes->Initialize();

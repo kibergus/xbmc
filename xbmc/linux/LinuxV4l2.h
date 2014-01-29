@@ -69,12 +69,14 @@ namespace V4l2 {
 class Buffers {
 public:
   // Creates empty buffers
-  Buffers() {}
+  Buffers() : buffers_(&ownedBuffers_) {}
 
-  Buffers(size_t size, int device, enum v4l2_buf_type type, enum v4l2_memory memory, bool queue = true);
+  Buffers(size_t size, int device, enum v4l2_buf_type type, bool queue = true);
+  // Share buffers with another device
+  Buffers(int device, enum v4l2_buf_type type, Buffers& buffers);
 
-  Buffers(Buffers&&) = default;
-  Buffers& operator=(Buffers&&) = default;
+  Buffers(Buffers&&);
+  Buffers& operator=(Buffers&&);
 
   Buffers(const Buffers&) = delete;
   Buffers& operator=(const Buffers&) = delete;
@@ -94,14 +96,15 @@ public:
   bool StreamOff();
 
   // Returns true if buffers are initialized
-  explicit operator bool() {return !buffers_.empty();}
-  size_t size() const {return buffers_.size();}
+  explicit operator bool() {return !buffers_->empty();}
+  size_t size() const {return buffers_->size();}
 
-  V4L2Buffer& operator[](size_t index) {return buffers_[index];}
-  const V4L2Buffer& operator[](size_t index) const {return buffers_[index];}
+  V4L2Buffer& operator[](size_t index) {return (*buffers_)[index];}
+  const V4L2Buffer& operator[](size_t index) const {return (*buffers_)[index];}
 
 private:
-  std::vector<V4L2Buffer> buffers_;
+  std::vector<V4L2Buffer> ownedBuffers_;
+  std::vector<V4L2Buffer>* buffers_;
   int device_;
   enum v4l2_buf_type type_;
   enum v4l2_memory memory_;

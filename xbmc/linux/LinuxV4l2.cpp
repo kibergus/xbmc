@@ -47,7 +47,7 @@ int CLinuxV4l2::RequestBuffer(int device, enum v4l2_buf_type type, enum v4l2_mem
   int ret = 0;
 
   if(device < 0)
-    return false;
+    return V4L2_ERROR;
 
   memset(&reqbuf, 0, sizeof(struct v4l2_requestbuffers));
 
@@ -292,24 +292,54 @@ int CLinuxV4l2::SetControllValue(int device, int id, int value)
 
 namespace V4l2 {
 
-Buffers::Buffers(size_t size, int device, enum v4l2_buf_type type, enum v4l2_memory memory, bool queue) 
-  : device_(device)
+Buffers::Buffers(size_t size, int device, enum v4l2_buf_type type, bool queue) 
+  : buffers_(&ownedBuffers_)
+  , device_(device)
   , type_(type)
-  , memory_(memory)
+  , memory_(V4L2_MEMORY_MMAP)
 {
-  // Request mfc capture buffers
+  // Request capture buffers
   size = CLinuxV4l2::RequestBuffer(device_, type_, memory_, size);
   if (size == V4L2_ERROR) {
     CLog::Log(LOGERROR, "%s::%s - MFC CAPTURE REQBUFS failed", CLASSNAME, __func__);
     return;
   }
 
-  buffers_.resize(size, V4L2Buffer());
+  ownedBuffers_.resize(size, V4L2Buffer());
 
-  if(!CLinuxV4l2::MmapBuffers(device_, buffers_.size(), &buffers_[0], type_, memory_, queue)) {
+  if(!CLinuxV4l2::MmapBuffers(device_, ownedBuffers_.size(), &ownedBuffers_[0], type_, memory_, queue)) {
     CLog::Log(LOGERROR, "%s::%s - MFC CAPTURE Cannot mmap memory for buffers", CLASSNAME, __func__);
     clear();
   }
+}
+
+Buffers::Buffers(int device, enum v4l2_buf_type type, Buffers& buffers)
+  : buffers_(buffers.buffers_)
+  , device_(device)
+  , type_(type)
+  , memory_(V4L2_MEMORY_USERPTR)
+{
+  // Request capture buffers
+  if (CLinuxV4l2::RequestBuffer(device_, type_, memory_, buffers.size()) == V4L2_ERROR) {
+    CLog::Log(LOGERROR, "%s::%s - MFC CAPTURE REQBUFS failed", CLASSNAME, __func__);
+    return;
+  }
+}
+
+Buffers::Buffers(Buffers&& buffers)
+    : ownedBuffers_(std::move(buffers.ownedBuffers_))
+    , buffers_(buffers.buffers_ == &buffers.ownedBuffers_ ? &ownedBuffers_ : buffers.buffers_)
+    , device_(buffers.device_)
+    , type_(buffers.type_)
+    , memory_(buffers.memory_)
+{}
+
+Buffers& Buffers::operator=(Buffers&& buffers) {
+    ownedBuffers_ = std::move(buffers.ownedBuffers_);
+    buffers_ = buffers.buffers_ == &buffers.ownedBuffers_ ? &ownedBuffers_ : buffers.buffers_;
+    device_ = buffers.device_;
+    type_ = buffers.type_;
+    memory_ = buffers.memory_;
 }
 
 Buffers::~Buffers() {
@@ -320,7 +350,7 @@ bool Buffers::QueueBuffer(size_t index, const timeval& pts) {
   if (index >= size()) {
     return false;
   }
-  auto& buffer = buffers_[index];
+  auto& buffer = (*buffers_)[index];
 
   struct v4l2_plane vplanes[V4L2_NUM_MAX_PLANES] = {};
   for (int planeIndex = 0; planeIndex < buffer.iNumPlanes; planeIndex++) 
@@ -363,7 +393,7 @@ int Buffers::DequeueBuffer(timeval& time, uint32_t& sequence) {
     return V4L2_ERROR;
   }
 
-  buffers_[vbuf.index].bQueue = false;
+  (*buffers_)[vbuf.index].bQueue = false;
   time = vbuf.timestamp;
   sequence = vbuf.sequence;
 
@@ -371,8 +401,8 @@ int Buffers::DequeueBuffer(timeval& time, uint32_t& sequence) {
 }
 
 int Buffers::FindFreeBuffer(size_t& index) {
-  for (index = 0; index < buffers_.size(); ++index) {
-    if (!buffers_[index].bQueue) {
+  for (index = 0; index < buffers_->size(); ++index) {
+    if (!(*buffers_)[index].bQueue) {
       return V4L2_OK;
     }
   }
@@ -402,7 +432,7 @@ bool Buffers::StreamOff() {
 }
 
 void Buffers::clear() {
-  for(auto& buffer : buffers_)
+  for(auto& buffer : ownedBuffers_)
   {
     for (size_t i = 0; i < buffer.iNumPlanes; i++)
     {
@@ -413,7 +443,7 @@ void Buffers::clear() {
       }
     }
   }
-  buffers_.clear();
+  ownedBuffers_.clear();
 }
 
 } // namespace V4l2
