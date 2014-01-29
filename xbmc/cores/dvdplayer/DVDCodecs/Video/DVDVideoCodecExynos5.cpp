@@ -23,7 +23,6 @@
   #include "config.h"
 #endif
 #include "DVDVideoCodecExynos5.h"
-#include "DVDVideoCodecExynos.h"
 #include "DVDDemuxers/DVDDemux.h"
 #include "DVDStreamInfo.h"
 #include "DVDClock.h"
@@ -50,8 +49,6 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/mman.h>
-#include <dirent.h>
-#include <optional>
 
 #ifdef CLASSNAME
 #undef CLASSNAME
@@ -62,14 +59,13 @@
 	#define V4L2_PIX_FMT_NV12MT_16X16  v4l2_fourcc('V', 'M', '1', '2') /* 12  Y/CbCr 4:2:0 16x16 macroblocks */
 #endif
 
-CDVDVideoCodecExynos5::CDVDVideoCodecExynos5() : CDVDVideoCodec() {
+CDVDVideoCodecExynos5::CDVDVideoCodecExynos5() {
   m_iVideoWidth = 0;
   m_iVideoHeight = 0;
   m_iOutputWidth = 0;
   m_iOutputHeight = 0;
-  m_iDecoderHandle = -1;
-  m_bVideoConvert = false;
-  m_bDropPictures = false;
+  m_decoderHandle = -1;
+  m_dropPictures = false;
   m_framesToSkip = 0;
   
   memzero(m_v4l2OutputBuffer);
@@ -81,7 +77,7 @@ CDVDVideoCodecExynos5::~CDVDVideoCodecExynos5() {
 }
 
 bool CDVDVideoCodecExynos5::OpenDevices() {
-  m_iDecoderHandle = OpenDevice("s5p-mfc-dec", [](int fd {
+  m_decoderHandle = Exynos::OpenDevice("s5p-mfc-dec", [](int fd) {
       struct v4l2_capability cap = {};
       if (!ioctl(fd, VIDIOC_QUERYCAP, &cap)) {
           return ((cap.capabilities & V4L2_CAP_VIDEO_M2M_MPLANE ||
@@ -91,93 +87,7 @@ bool CDVDVideoCodecExynos5::OpenDevices() {
           return false;
       }
     });
-  return m_iDecoderHandle > 0;
-}
-
-bool CDVDVideoCodecExynos5::SetupOutputFormat(CDVDStreamInfo &hints) {
-  // Set format in which encoded frames are streamed TO mfc
-  struct v4l2_format fmt = {};
-  switch(hints.codec)
-  {
-/*
-    case CODEC_TYPE_VC1_RCV:
-      fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_VC1_ANNEX_L;
-*/
-    case CODEC_ID_VC1:
-      fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_VC1_ANNEX_G;
-      m_name = "mfc-vc1";
-      break;
-    case CODEC_ID_MPEG1VIDEO:
-      fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_MPEG1;
-      m_name = "mfc-mpeg1";
-      break;
-    case CODEC_ID_MPEG2VIDEO:
-      fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_MPEG2;
-      m_name = "mfc-mpeg2";
-      break;
-    case CODEC_ID_MPEG4:
-      fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_MPEG4;
-      m_name = "mfc-mpeg4";
-      break;
-    case CODEC_ID_H263:
-      fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_H263;
-      m_name = "mfc-h263";
-      break;
-    case CODEC_ID_H264:
-      fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_H264;
-      m_name = "mfc-h264";
-      break;
-    default:
-      return false;
-      break;
-  }
-  fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-  fmt.fmt.pix_mp.plane_fmt[0].sizeimage = STREAM_BUFFER_SIZE;
-  fmt.fmt.pix_mp.num_planes = V4L2_NUM_MAX_PLANES;
-
-  if (ioctl(m_iDecoderHandle, VIDIOC_S_FMT, &fmt)) {
-    CLog::Log(LOGERROR, "%s::%s - MFC OUTPUT S_FMT failed", CLASSNAME, __func__);
-    return false;
-  } else {
-    return true;
-  }
-}
-
-bool CDVDVideoCodecExynos5::SendHeader(CDVDStreamInfo &hints) {
-  m_bVideoConvert = m_converter.Open(hints.codec, (uint8_t *)hints.extradata, hints.extrasize, true);
-
-  unsigned int extraSize = 0;
-  uint8_t *extraData = NULL;
-
-  if(m_bVideoConvert) {
-    if(m_converter.GetExtraData() != NULL && m_converter.GetExtraSize() > 0) {
-      extraSize = m_converter.GetExtraSize();
-      extraData = m_converter.GetExtraData();
-    }
-  } else {
-    extraSize = hints.extrasize;
-    extraData = (uint8_t*)hints.extradata;
-  }
-
-  // Prepare header
-  m_v4l2MFCOutputBuffers[0].iBytesUsed[0] = extraSize;
-  fast_memcpy((uint8_t *)m_v4l2MFCOutputBuffers[0].cPlane[0], extraData, extraSize);
-
-  // Queue header to mfc output queue
-  if (!m_v4l2MFCOutputBuffers.QueueBuffer(0)) {
-    CLog::Log(LOGERROR, "%s::%s - MFC Error queuing header", CLASSNAME, __func__);
-    return false;
-  }
-  CLog::Log(LOGDEBUG, "%s::%s - MFC OUTPUT <- %d header of size %d", CLASSNAME, __func__, 0, extraSize);
-
-  // STREAMON on mfc OUTPUT
-  if (!m_v4l2MFCOutputBuffers.StreamOn()) {
-    CLog::Log(LOGERROR, "%s::%s - MFC OUTPUT Failed to Stream ON", CLASSNAME, __func__);
-    return false;
-  }
-  CLog::Log(LOGDEBUG, "%s::%s - MFC OUTPUT Stream ON", CLASSNAME, __func__);
-
-  return true;
+  return m_decoderHandle > 0;
 }
 
 bool CDVDVideoCodecExynos5::SetupCaptureFormat(int& MFCCapturePlane1Size, int& MFCCapturePlane2Size) {
@@ -185,14 +95,14 @@ bool CDVDVideoCodecExynos5::SetupCaptureFormat(int& MFCCapturePlane1Size, int& M
   struct v4l2_format fmt = {};
   fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
   fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_NV12M;
-  if (ioctl(m_iDecoderHandle, VIDIOC_S_FMT, &fmt)) {
+  if (ioctl(m_decoderHandle, VIDIOC_S_FMT, &fmt)) {
     CLog::Log(LOGERROR, "%s::%s - MFC CAPTURE S_FMT Failed on CAPTURE", CLASSNAME, __func__);
     return false;
   }
   CLog::Log(LOGDEBUG, "%s::%s - MFC CAPTURE S_FMT 0x%x",  CLASSNAME, __func__, fmt.fmt.pix_mp.pixelformat);
 
   // Get other picture format properties
-  if (ioctl(m_iDecoderHandle, VIDIOC_G_FMT, &fmt)) {
+  if (ioctl(m_decoderHandle, VIDIOC_G_FMT, &fmt)) {
     CLog::Log(LOGERROR, "%s::%s - MFC CAPTURE G_FMT Failed", CLASSNAME, __func__);
     return false;
   }
@@ -214,7 +124,7 @@ bool CDVDVideoCodecExynos5::GetCaptureCrop() {
   // Get mfc capture crop
   struct v4l2_crop crop = {};
   crop.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-  if (ioctl(m_iDecoderHandle, VIDIOC_G_CROP, &crop)) {
+  if (ioctl(m_decoderHandle, VIDIOC_G_CROP, &crop)) {
     CLog::Log(LOGERROR, "%s::%s - MFC CAPTURE G_CROP Failed to get crop information", CLASSNAME, __func__);
     return false;
   }
@@ -225,39 +135,6 @@ bool CDVDVideoCodecExynos5::GetCaptureCrop() {
   m_v4l2OutputBuffer.cPlane[0] = new BYTE[m_iVideoWidth * m_iVideoHeight];
   m_v4l2OutputBuffer.cPlane[1] = new BYTE[m_iVideoWidth * m_iVideoHeight / 4];
   m_v4l2OutputBuffer.cPlane[2] = new BYTE[m_iVideoWidth * m_iVideoHeight / 4];
-
-  return true;
-}
-
-bool CDVDVideoCodecExynos5::SetupCaptureBuffers(int MFCCapturePlane1Size, int MFCCapturePlane2Size) {
-  // Get mfc needed number of buffers
-  struct v4l2_control ctrl = {};
-  ctrl.id = V4L2_CID_MIN_BUFFERS_FOR_CAPTURE;
-  if (ioctl(m_iDecoderHandle, VIDIOC_G_CTRL, &ctrl)) {
-    CLog::Log(LOGERROR, "%s::%s - MFC CAPTURE Failed to get the number of buffers required", CLASSNAME, __func__);
-    return false;
-  }
-  int captureBuffersCount = ctrl.value + MFC_CAPTURE_EXTRA_BUFFER_CNT;
-
-  // Allocate, Memory Map and queue mfc capture buffers
-  m_v4l2MFCCaptureBuffers = V4l2::Buffers(captureBuffersCount, m_iDecoderHandle, V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, V4L2_MEMORY_MMAP, true);
-  if (!m_v4l2MFCCaptureBuffers) {
-    return false;
-  }
-
-  for (int n = 0; n < m_v4l2MFCCaptureBuffers.size(); n++) {
-    m_v4l2MFCCaptureBuffers[n].iBytesUsed[0] = MFCCapturePlane1Size;
-    m_v4l2MFCCaptureBuffers[n].iBytesUsed[1] = MFCCapturePlane2Size;
-    m_v4l2MFCCaptureBuffers[n].bQueue = true;
-  }
-  CLog::Log(LOGDEBUG, "%s::%s - MFC CAPTURE Succesfully allocated, mmapped and queued buffers", CLASSNAME, __func__);
-
-  // STREAMON on mfc CAPTURE
-  if (!m_v4l2MFCCaptureBuffers.StreamOn()) {
-	CLog::Log(LOGERROR, "%s::%s - MFC CAPTURE Failed to Stream ON", CLASSNAME, __func__);
-    return false;
-  }
-  CLog::Log(LOGDEBUG, "%s::%s - MFC CAPTURE Stream ON", CLASSNAME, __func__);
 
   return true;
 }
@@ -274,7 +151,7 @@ bool CDVDVideoCodecExynos5::Open(CDVDStreamInfo &hints, CDVDCodecOptions &/*opti
   Dispose();
 
   if (!OpenDevices()) {
-    CLog::Log(LOGDEBUG, "%s::%s - Needed devices not found", CLASSNAME, __func__);
+    CLog::Log(LOGERROR, "%s::%s - Needed devices not found", CLASSNAME, __func__);
     return false;
   }
 
@@ -286,7 +163,7 @@ bool CDVDVideoCodecExynos5::Open(CDVDStreamInfo &hints, CDVDCodecOptions &/*opti
   // Setup mfc output queue (OUTPUT - name of the queue where TO encoded frames are streamed, CAPTURE - name of the queue where FROM decoded frames are taken)
   if (!SetupOutputFormat(hints))
     return false;
-  m_v4l2MFCOutputBuffers = V4l2::Buffers(MFC_OUTPUT_BUFFERS_CNT, m_iDecoderHandle, V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE, V4L2_MEMORY_MMAP, false);
+  m_v4l2MFCOutputBuffers = V4l2::Buffers(MFC_OUTPUT_BUFFERS_CNT, m_decoderHandle, V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE, V4L2_MEMORY_MMAP, false);
   if (!m_v4l2MFCOutputBuffers) {
     return false;
   }
@@ -314,51 +191,23 @@ void CDVDVideoCodecExynos5::Dispose() {
   m_v4l2MFCCaptureBuffers.clear();
 
   CLog::Log(LOGDEBUG, "%s::%s - Closing devices", CLASSNAME, __func__);
-  if (m_iDecoderHandle >= 0) {
+  if (m_decoderHandle >= 0) {
     if (m_v4l2MFCOutputBuffers.StreamOff())
       CLog::Log(LOGDEBUG, "%s::%s - MFC OUTPUT Stream OFF", CLASSNAME, __func__);
     if (m_v4l2MFCCaptureBuffers.StreamOff())
       CLog::Log(LOGDEBUG, "%s::%s - MFC CAPTURE Stream OFF", CLASSNAME, __func__);
-    close(m_iDecoderHandle);
+    close(m_decoderHandle);
   }
 
   m_iVideoWidth = 0;
   m_iVideoHeight = 0;
   m_iOutputWidth = 0;
   m_iOutputHeight = 0;
-  m_iDecoderHandle = -1;
-  m_bVideoConvert = false;
-  m_bDropPictures = false;
+  m_decoderHandle = -1;
+  m_dropPictures = false;
 
   memzero(m_v4l2OutputBuffer);
   memzero(m_videoBuffer);
-}
-
-void CDVDVideoCodecExynos5::SetDropState(bool bDrop) {
-  m_bDropPictures = bDrop;
-}
-
-int CDVDVideoCodecExynos5::SendBuffer(int bufferIndex, uint8_t *demuxer_content, int demuxer_bytes, double pts) {
-  if(m_bVideoConvert) {
-    m_converter.Convert(demuxer_content, demuxer_bytes);
-    demuxer_bytes = m_converter.GetConvertSize();
-    demuxer_content = m_converter.GetConvertBuffer();
-  }
-
-  if(demuxer_bytes >= m_v4l2MFCOutputBuffers[bufferIndex].iSize[0]) {
-    CLog::Log(LOGERROR, "%s::%s - Packet to big for streambuffer", CLASSNAME, __func__);
-    return VC_ERROR;
-  }
-
-  fast_memcpy((uint8_t *)m_v4l2MFCOutputBuffers[bufferIndex].cPlane[0], demuxer_content, demuxer_bytes);
-  m_v4l2MFCOutputBuffers[bufferIndex].iBytesUsed[0] = demuxer_bytes;
-
-  if (!m_v4l2MFCOutputBuffers.QueueBuffer(bufferIndex, {long(pts), long((pts - long(pts)) * 1000)})) {
-    CLog::Log(LOGERROR, "%s::%s - MFC OUTPUT Failed to queue buffer with index %d, errno %d", CLASSNAME, __func__, bufferIndex, errno);
-    return VC_ERROR;
-  }
-    
-  return 0;
 }
 
 void CDVDVideoCodecExynos5::PrepareOutputBuffer(int bufferIndex) {
@@ -388,7 +237,7 @@ void CDVDVideoCodecExynos5::PrepareOutputBuffer(int bufferIndex) {
   	  }
   	}
   	// Deinteleave NV12 UV plane to U and V planes of YUV420
-  	deinterleave_chroma_neon(m_v4l2OutputBuffer.cPlane[1], m_v4l2OutputBuffer.cPlane[2], m_iVideoWidth >> 1, m_v4l2MFCCaptureBuffers[bufferIndex].cPlane[1], m_iOutputWidth, m_iVideoHeight >> 1);
+  	Exynos::deinterleave_chroma_neon(m_v4l2OutputBuffer.cPlane[1], m_v4l2OutputBuffer.cPlane[2], m_iVideoWidth >> 1, m_v4l2MFCCaptureBuffers[bufferIndex].cPlane[1], m_iOutputWidth, m_iVideoHeight >> 1);
 
   	m_videoBuffer.data[0]         = (BYTE*)m_v4l2OutputBuffer.cPlane[0];
   	m_videoBuffer.data[1]         = (BYTE*)m_v4l2OutputBuffer.cPlane[1];
@@ -420,9 +269,8 @@ int CDVDVideoCodecExynos5::Decode(BYTE* pData, int iSize, double dts, double pts
       return VC_FLUSHED;
     }
 
-    ret = SendBuffer(index, pData, iSize, pts);
-    if (ret) {
-        return ret;
+    if (!SendBuffer(index, pData, iSize, pts)) {
+        return VC_ERROR;
     }
     ++m_inputSequence;
   }
@@ -456,7 +304,7 @@ int CDVDVideoCodecExynos5::Decode(BYTE* pData, int iSize, double dts, double pts
   }
   m_sequence = sequence;
 
-  if (m_bDropPictures) {
+  if (m_dropPictures) {
     m_videoBuffer.iFlags      |= DVP_FLAG_DROPPED;
     CLog::Log(LOGDEBUG, "%s::%s - Dropping frame with index %d", CLASSNAME, __func__, index);
   } else {
@@ -480,17 +328,4 @@ int CDVDVideoCodecExynos5::Decode(BYTE* pData, int iSize, double dts, double pts
 //  msg("Decode time: %d", XbmcThreads::SystemClockMillis() - dtime);
   
   return VC_PICTURE; // Picture is finally ready to be processed further
-}
-
-void CDVDVideoCodecExynos5::Reset() {
-}
-
-bool CDVDVideoCodecExynos5::GetPicture(DVDVideoPicture* pDvdVideoPicture) {
-  *pDvdVideoPicture = m_videoBuffer;
-  return true;
-}
-
-bool CDVDVideoCodecExynos5::ClearPicture(DVDVideoPicture* pDvdVideoPicture)
-{
-  return CDVDVideoCodec::ClearPicture(pDvdVideoPicture);
 }
