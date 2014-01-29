@@ -112,8 +112,6 @@ bool CLinuxV4l2::MmapBuffers(int device, int count, V4L2Buffer *v4l2Buffers, enu
     buffer->iNumPlanes = 0;
     for (j = 0; j < V4L2_NUM_MAX_PLANES; j++) 
     {
-      //printf("%s::%s - plane %d %d size %d 0x%08x\n", CLASSNAME, __func__, i, j, buf.m.planes[j].length,
-      //    buf.m.planes[j].m.userptr);
       buffer->iSize[j]       = buf.m.planes[j].length;
       buffer->iBytesUsed[j]  = buf.m.planes[j].bytesused;
       if(buffer->iSize[j])
