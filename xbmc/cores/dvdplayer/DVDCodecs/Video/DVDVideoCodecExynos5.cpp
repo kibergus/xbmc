@@ -302,14 +302,12 @@ int CDVDVideoCodecExynos5::Decode(BYTE* pData, int iSize, double dts, double pts
   m_videoBuffer.pts = (ptsTime.tv_sec + double(ptsTime.tv_usec)/1000); 
   m_videoBuffer.dts = m_videoBuffer.pts;
     
-  // Queue dequeued from FIMC OUPUT frame back to MFC CAPTURE
-  if (&m_v4l2MFCCaptureBuffers[index] && !m_v4l2MFCCaptureBuffers[index].bQueue) {
-    if (!m_v4l2MFCCaptureBuffers.QueueBuffer(index)) {
-      CLog::Log(LOGERROR, "%s::%s - queue output buffer\n", CLASSNAME, __func__);
-      m_videoBuffer.iFlags      |= DVP_FLAG_DROPPED;
-      m_videoBuffer.iFlags      &= DVP_FLAG_ALLOCATED;
-      return VC_ERROR;
-    }
+  // Queue dequeued buffer back to MFC CAPTURE
+  if (!m_v4l2MFCCaptureBuffers.QueueBuffer(index)) {
+    CLog::Log(LOGERROR, "%s::%s - queue output buffer\n", CLASSNAME, __func__);
+    m_videoBuffer.iFlags      |= DVP_FLAG_DROPPED;
+    m_videoBuffer.iFlags      &= DVP_FLAG_ALLOCATED;
+    return VC_ERROR;
   }
 
 //  msg("Decode time: %d", XbmcThreads::SystemClockMillis() - dtime);

@@ -65,10 +65,6 @@ CDVDVideoCodecExynos4::CDVDVideoCodecExynos4() : CDVDVideoCodecExynos() {
   m_iConvertedWidth = 0;
   m_iConvertedHeight = 0;
   m_converterHandle = -1;
-  
-  m_bFIMCStartConverter = true;
-  
-  m_iFIMCdequeuedBufferNumber = -1;
 }
 
 CDVDVideoCodecExynos4::~CDVDVideoCodecExynos4() {
@@ -256,6 +252,15 @@ bool CDVDVideoCodecExynos4::Open(CDVDStreamInfo &hints, CDVDCodecOptions &option
   uint32_t sequence;
   int index = m_v4l2MFCOutputBuffers.DequeueBuffer(ptsTime, sequence);
 
+  if (m_v4l2FIMCOutputBuffers.StreamOn())
+    CLog::Log(LOGDEBUG, "%s::%s - FIMC OUTPUT Stream ON", CLASSNAME, __func__);
+  else
+    CLog::Log(LOGERROR, "%s::%s - FIMC OUTPUT Failed to Stream ON", CLASSNAME, __func__);
+  if (m_v4l2FIMCCaptureBuffers.StreamOn())
+    CLog::Log(LOGDEBUG, "%s::%s - FIMC CAPTURE Stream ON", CLASSNAME, __func__);
+  else
+    CLog::Log(LOGERROR, "%s::%s - FIMC CAPTURE Failed to Stream ON", CLASSNAME, __func__);
+
   CLog::Log(LOGNOTICE, "%s::%s - MFC Setup succesfull, start streaming", CLASSNAME, __func__);  
   return true;
 }
@@ -297,6 +302,18 @@ void CDVDVideoCodecExynos4::Dispose() {
 int CDVDVideoCodecExynos4::Decode(BYTE* pData, int iSize, double dts, double pts) {
 //  unsigned int dtime = XbmcThreads::SystemClockMillis();
 
+  // Find buffers processed by FIMC and return it to MFC
+/*  size_t freeIndex;
+  int ret = m_v4l2FIMCOutputBuffers.FindFreeBuffer(freeIndex);
+  if (ret == V4L2_ERROR) {
+    return VC_ERROR;
+  } else if (ret != V4L2_BUSY) {
+    if (!m_v4l2MFCCaptureBuffers.QueueBuffer(freeIndex)) {
+      CLog::Log(LOGERROR, "%s::%s - queue output buffer\n", CLASSNAME, __func__);
+      return VC_ERROR;
+    }
+  }*/
+
   if(pData) {
 	// Find buffer ready to be filled
     size_t index;
@@ -331,54 +348,42 @@ int CDVDVideoCodecExynos4::Decode(BYTE* pData, int iSize, double dts, double pts
     m_videoBuffer.iFlags      |= DVP_FLAG_DROPPED;
     m_videoBuffer.pts = (ptsTime.tv_sec + double(ptsTime.tv_usec)/1000); 
     m_videoBuffer.dts = m_videoBuffer.pts;
-    CLog::Log(LOGDEBUG, "%s::%s - Dropping frame with index %d", CLASSNAME, __func__, index);
-  } else {
-    if (m_iFIMCdequeuedBufferNumber >= 0 && !m_v4l2FIMCCaptureBuffers[m_iFIMCdequeuedBufferNumber].bQueue) {
-      if (!m_v4l2FIMCCaptureBuffers.QueueBuffer(m_iFIMCdequeuedBufferNumber, ptsTime)) {
-        CLog::Log(LOGERROR, "%s::%s - FIMC CAPTURE Failed to queue buffer with index %d", CLASSNAME, __func__, m_iFIMCdequeuedBufferNumber);
-        return VC_ERROR;
-      }
-      m_iFIMCdequeuedBufferNumber = -1;
+
+    if (!m_v4l2MFCCaptureBuffers.QueueBuffer(index)) {
+      CLog::Log(LOGERROR, "%s::%s - queue output buffer\n", CLASSNAME, __func__);
+      m_videoBuffer.iFlags      &= DVP_FLAG_ALLOCATED;
+      return VC_ERROR;
     }
 
+    CLog::Log(LOGDEBUG, "%s::%s - Dropping frame with index %d", CLASSNAME, __func__, index);
+  } else {
+    // Transfer buffer from MFC to FIMC
     if (!m_v4l2FIMCOutputBuffers.QueueBuffer(index, ptsTime)) {
       CLog::Log(LOGERROR, "%s::%s - FIMC OUTPUT Failed to queue buffer with index %d, errno %d", CLASSNAME, __func__, int(index), errno);
       return VC_ERROR;
     }
 
-    if (m_bFIMCStartConverter) {
-      if (m_v4l2FIMCOutputBuffers.StreamOn())
-        CLog::Log(LOGDEBUG, "%s::%s - FIMC OUTPUT Stream ON", CLASSNAME, __func__);
-      else
-        CLog::Log(LOGERROR, "%s::%s - FIMC OUTPUT Failed to Stream ON", CLASSNAME, __func__);
-      if (m_v4l2FIMCCaptureBuffers.StreamOn())
-        CLog::Log(LOGDEBUG, "%s::%s - FIMC CAPTURE Stream ON", CLASSNAME, __func__);
-      else
-        CLog::Log(LOGERROR, "%s::%s - FIMC CAPTURE Failed to Stream ON", CLASSNAME, __func__);
-      m_bFIMCStartConverter = false;
-      return VC_BUFFER; //Queue one more frame for double buffering on FIMC
-    }
-
-	// Find buffer ready to be filled
-    // NOTE: this is the same index variable where MFC dequeued index is stored and it is used to dequeue buffer back to MFC
+// TODO I think, that error is somewhere here. We should search only within buffers, which were sent to FIMC. Otherwise we sent back to MFC decoded, but unprocessed frames
     size_t freeIndex;
     int ret = m_v4l2FIMCOutputBuffers.FindFreeBuffer(freeIndex);
-    index = freeIndex;
     if (ret == V4L2_ERROR) {
       return VC_ERROR;
-    } else if (ret == V4L2_BUSY) { // buffer is still busy
-      CLog::Log(LOGERROR, "%s::%s - FIMC OUTPUT All buffers are queued and busy, no space for new frame to decode. Very broken situation.", CLASSNAME, __func__);
-      /* FIXME This should be handled as abnormal situation that should be addressed, otherwise decoding will stuck here forever */
-      return VC_FLUSHED;
+    } else if (ret != V4L2_BUSY) {
+      if (!m_v4l2MFCCaptureBuffers.QueueBuffer(freeIndex)) {
+        CLog::Log(LOGERROR, "%s::%s - queue output buffer\n", CLASSNAME, __func__);
+        m_videoBuffer.iFlags      |= DVP_FLAG_DROPPED;
+        m_videoBuffer.iFlags      &= DVP_FLAG_ALLOCATED;
+        return VC_ERROR;
+      }
     }
 
     timeval ptsTime;
     uint32_t sequence;
-    m_iFIMCdequeuedBufferNumber = m_v4l2FIMCCaptureBuffers.DequeueBuffer(ptsTime, sequence);
-    if (m_iFIMCdequeuedBufferNumber < 0) {
+    int FIMCdequeuedBufferNumber = m_v4l2FIMCCaptureBuffers.DequeueBuffer(ptsTime, sequence);
+    if (FIMCdequeuedBufferNumber < 0) {
       if (errno == EAGAIN) // Dequeue buffer not ready, need more data on input. EAGAIN = 11
         return VC_BUFFER;
-      CLog::Log(LOGERROR, "%s::%s - FIMC CAPTURE error dequeue output buffer, got number %d, errno %d", CLASSNAME, __func__, m_iFIMCdequeuedBufferNumber, errno);
+      CLog::Log(LOGERROR, "%s::%s - FIMC CAPTURE error dequeue output buffer, got number %d, errno %d", CLASSNAME, __func__, FIMCdequeuedBufferNumber, errno);
       return VC_ERROR;
     }
 
@@ -401,19 +406,14 @@ int CDVDVideoCodecExynos4::Decode(BYTE* pData, int iSize, double dts, double pts
     m_videoBuffer.iLineSize[1]    = m_iConvertedWidth >> 1;
     m_videoBuffer.iLineSize[2]    = m_iConvertedWidth >> 1;
     m_videoBuffer.iLineSize[3]    = 0;
-    m_videoBuffer.data[0]         = (BYTE*)m_v4l2FIMCCaptureBuffers[m_iFIMCdequeuedBufferNumber].cPlane[0];
-    m_videoBuffer.data[1]         = (BYTE*)m_v4l2FIMCCaptureBuffers[m_iFIMCdequeuedBufferNumber].cPlane[1];
-    m_videoBuffer.data[2]         = (BYTE*)m_v4l2FIMCCaptureBuffers[m_iFIMCdequeuedBufferNumber].cPlane[2];
+    m_videoBuffer.data[0]         = (BYTE*)m_v4l2FIMCCaptureBuffers[FIMCdequeuedBufferNumber].cPlane[0];
+    m_videoBuffer.data[1]         = (BYTE*)m_v4l2FIMCCaptureBuffers[FIMCdequeuedBufferNumber].cPlane[1];
+    m_videoBuffer.data[2]         = (BYTE*)m_v4l2FIMCCaptureBuffers[FIMCdequeuedBufferNumber].cPlane[2];
     m_videoBuffer.pts = (ptsTime.tv_sec + double(ptsTime.tv_usec)/1000); 
     m_videoBuffer.dts = m_videoBuffer.pts;
-  }
 
-  // Queue dequeued from FIMC OUPUT frame back to MFC CAPTURE
-  if (&m_v4l2MFCCaptureBuffers[index] && !m_v4l2MFCCaptureBuffers[index].bQueue) {
-    if (!m_v4l2MFCCaptureBuffers.QueueBuffer(index)) {
-      CLog::Log(LOGERROR, "%s::%s - queue output buffer\n", CLASSNAME, __func__);
-      m_videoBuffer.iFlags      |= DVP_FLAG_DROPPED;
-      m_videoBuffer.iFlags      &= DVP_FLAG_ALLOCATED;
+    if (!m_v4l2FIMCCaptureBuffers.QueueBuffer(FIMCdequeuedBufferNumber)) {
+      CLog::Log(LOGERROR, "%s::%s - FIMC CAPTURE Failed to queue buffer with index %d", CLASSNAME, __func__, FIMCdequeuedBufferNumber);
       return VC_ERROR;
     }
   }

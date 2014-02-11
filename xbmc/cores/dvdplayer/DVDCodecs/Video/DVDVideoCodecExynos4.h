@@ -57,10 +57,6 @@ protected:
   int m_iFIMCCapturePlane2Size;
   int m_iFIMCCapturePlane3Size;
   
-  int m_iFIMCdequeuedBufferNumber;
-  
-  bool m_bFIMCStartConverter;
-
   bool OpenDevices();
   bool SetupCaptureFormat(int& MFCCapturePlane1Size, int& MFCCapturePlane2Size);
   bool GetCaptureCrop();
