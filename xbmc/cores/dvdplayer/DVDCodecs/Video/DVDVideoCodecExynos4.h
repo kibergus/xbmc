@@ -60,6 +60,8 @@ protected:
   bool OpenDevices();
   bool SetupCaptureFormat(int& MFCCapturePlane1Size, int& MFCCapturePlane2Size);
   bool GetCaptureCrop();
+  bool ReturnBuffersToMFC();
+  int DequeueBufferFromFIMC();
 
 private:
   // 2 begins to be slow.

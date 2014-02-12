@@ -299,20 +299,72 @@ void CDVDVideoCodecExynos4::Dispose() {
   memzero(m_videoBuffer);
 }
 
-int CDVDVideoCodecExynos4::Decode(BYTE* pData, int iSize, double dts, double pts) {
-//  unsigned int dtime = XbmcThreads::SystemClockMillis();
-
-  // Find buffers processed by FIMC and return it to MFC
-/*  size_t freeIndex;
-  int ret = m_v4l2FIMCOutputBuffers.FindFreeBuffer(freeIndex);
-  if (ret == V4L2_ERROR) {
-    return VC_ERROR;
-  } else if (ret != V4L2_BUSY) {
-    if (!m_v4l2MFCCaptureBuffers.QueueBuffer(freeIndex)) {
-      CLog::Log(LOGERROR, "%s::%s - queue output buffer\n", CLASSNAME, __func__);
-      return VC_ERROR;
+// Find buffers processed by FIMC and return it to MFC
+bool CDVDVideoCodecExynos4::ReturnBuffersToMFC() {
+    timeval time;
+    uint32_t sequence;
+    int index;
+    while((index = m_v4l2FIMCOutputBuffers.DequeueBuffer(time, sequence)) >= 0) {
+        if (!m_v4l2MFCCaptureBuffers.QueueBuffer(index)) {
+          CLog::Log(LOGERROR, "%s::%s - Could not queue MFC capture buffer\n", CLASSNAME, __func__);
+          m_videoBuffer.iFlags      |= DVP_FLAG_DROPPED;
+          m_videoBuffer.iFlags      &= DVP_FLAG_ALLOCATED;
+          return false;
+      }
     }
-  }*/
+    return true;
+}
+
+// Checks if there is ready buffer and converts it to a m_videoBuffer
+// Returns VC_PICTURE on success and VC_BUFFER if buffer is not ready. Or VC_ERROR on error.
+int CDVDVideoCodecExynos4::DequeueBufferFromFIMC() {
+  timeval ptsTime;
+  uint32_t sequence;
+  int FIMCdequeuedBufferNumber = m_v4l2FIMCCaptureBuffers.DequeueBuffer(ptsTime, sequence);
+  if (FIMCdequeuedBufferNumber < 0) {
+    if (errno == EAGAIN) // Dequeue buffer not ready, need more data on input. EAGAIN = 11
+      return VC_BUFFER;
+    CLog::Log(LOGERROR, "%s::%s - FIMC CAPTURE error dequeue output buffer, got number %d, errno %d", CLASSNAME, __func__, FIMCdequeuedBufferNumber, errno);
+    return VC_ERROR;
+  }
+
+  m_videoBuffer.iFlags          = DVP_FLAG_ALLOCATED;
+  m_videoBuffer.color_range     = 0;
+  m_videoBuffer.color_matrix    = 4;
+
+  m_videoBuffer.iDisplayWidth   = m_iConvertedWidth;
+  m_videoBuffer.iDisplayHeight  = m_iConvertedHeight;
+  m_videoBuffer.iWidth          = m_iConvertedWidth;
+  m_videoBuffer.iHeight         = m_iConvertedHeight;
+
+  m_videoBuffer.data[0]         = 0;
+  m_videoBuffer.data[1]         = 0;
+  m_videoBuffer.data[2]         = 0;
+  m_videoBuffer.data[3]         = 0;
+    
+  m_videoBuffer.format          = RENDER_FMT_YUV420P;
+  m_videoBuffer.iLineSize[0]    = m_iConvertedWidth;
+  m_videoBuffer.iLineSize[1]    = m_iConvertedWidth >> 1;
+  m_videoBuffer.iLineSize[2]    = m_iConvertedWidth >> 1;
+  m_videoBuffer.iLineSize[3]    = 0;
+  m_videoBuffer.data[0]         = (BYTE*)m_v4l2FIMCCaptureBuffers[FIMCdequeuedBufferNumber].cPlane[0];
+  m_videoBuffer.data[1]         = (BYTE*)m_v4l2FIMCCaptureBuffers[FIMCdequeuedBufferNumber].cPlane[1];
+  m_videoBuffer.data[2]         = (BYTE*)m_v4l2FIMCCaptureBuffers[FIMCdequeuedBufferNumber].cPlane[2];
+  m_videoBuffer.pts = (ptsTime.tv_sec + double(ptsTime.tv_usec)/1000); 
+  m_videoBuffer.dts = m_videoBuffer.pts;
+
+  if (!m_v4l2FIMCCaptureBuffers.QueueBuffer(FIMCdequeuedBufferNumber)) {
+    CLog::Log(LOGERROR, "%s::%s - FIMC CAPTURE Failed to queue buffer with index %d", CLASSNAME, __func__, FIMCdequeuedBufferNumber);
+    return VC_ERROR;
+  }
+
+  return VC_PICTURE;
+}
+
+int CDVDVideoCodecExynos4::Decode(BYTE* pData, int iSize, double dts, double pts) {
+  if (!ReturnBuffersToMFC()) {
+    return VC_ERROR;
+  }
 
   if(pData) {
 	// Find buffer ready to be filled
@@ -349,6 +401,7 @@ int CDVDVideoCodecExynos4::Decode(BYTE* pData, int iSize, double dts, double pts
     m_videoBuffer.pts = (ptsTime.tv_sec + double(ptsTime.tv_usec)/1000); 
     m_videoBuffer.dts = m_videoBuffer.pts;
 
+    // Return this buffer back to MFC
     if (!m_v4l2MFCCaptureBuffers.QueueBuffer(index)) {
       CLog::Log(LOGERROR, "%s::%s - queue output buffer\n", CLASSNAME, __func__);
       m_videoBuffer.iFlags      &= DVP_FLAG_ALLOCATED;
@@ -356,6 +409,7 @@ int CDVDVideoCodecExynos4::Decode(BYTE* pData, int iSize, double dts, double pts
     }
 
     CLog::Log(LOGDEBUG, "%s::%s - Dropping frame with index %d", CLASSNAME, __func__, index);
+    return VC_PICTURE;
   } else {
     // Transfer buffer from MFC to FIMC
     if (!m_v4l2FIMCOutputBuffers.QueueBuffer(index, ptsTime)) {
@@ -363,62 +417,6 @@ int CDVDVideoCodecExynos4::Decode(BYTE* pData, int iSize, double dts, double pts
       return VC_ERROR;
     }
 
-// TODO I think, that error is somewhere here. We should search only within buffers, which were sent to FIMC. Otherwise we sent back to MFC decoded, but unprocessed frames
-    size_t freeIndex;
-    int ret = m_v4l2FIMCOutputBuffers.FindFreeBuffer(freeIndex);
-    if (ret == V4L2_ERROR) {
-      return VC_ERROR;
-    } else if (ret != V4L2_BUSY) {
-      if (!m_v4l2MFCCaptureBuffers.QueueBuffer(freeIndex)) {
-        CLog::Log(LOGERROR, "%s::%s - queue output buffer\n", CLASSNAME, __func__);
-        m_videoBuffer.iFlags      |= DVP_FLAG_DROPPED;
-        m_videoBuffer.iFlags      &= DVP_FLAG_ALLOCATED;
-        return VC_ERROR;
-      }
-    }
-
-    timeval ptsTime;
-    uint32_t sequence;
-    int FIMCdequeuedBufferNumber = m_v4l2FIMCCaptureBuffers.DequeueBuffer(ptsTime, sequence);
-    if (FIMCdequeuedBufferNumber < 0) {
-      if (errno == EAGAIN) // Dequeue buffer not ready, need more data on input. EAGAIN = 11
-        return VC_BUFFER;
-      CLog::Log(LOGERROR, "%s::%s - FIMC CAPTURE error dequeue output buffer, got number %d, errno %d", CLASSNAME, __func__, FIMCdequeuedBufferNumber, errno);
-      return VC_ERROR;
-    }
-
-    m_videoBuffer.iFlags          = DVP_FLAG_ALLOCATED;
-    m_videoBuffer.color_range     = 0;
-    m_videoBuffer.color_matrix    = 4;
-
-    m_videoBuffer.iDisplayWidth   = m_iConvertedWidth;
-    m_videoBuffer.iDisplayHeight  = m_iConvertedHeight;
-    m_videoBuffer.iWidth          = m_iConvertedWidth;
-    m_videoBuffer.iHeight         = m_iConvertedHeight;
-
-    m_videoBuffer.data[0]         = 0;
-    m_videoBuffer.data[1]         = 0;
-    m_videoBuffer.data[2]         = 0;
-    m_videoBuffer.data[3]         = 0;
-    
-    m_videoBuffer.format          = RENDER_FMT_YUV420P;
-    m_videoBuffer.iLineSize[0]    = m_iConvertedWidth;
-    m_videoBuffer.iLineSize[1]    = m_iConvertedWidth >> 1;
-    m_videoBuffer.iLineSize[2]    = m_iConvertedWidth >> 1;
-    m_videoBuffer.iLineSize[3]    = 0;
-    m_videoBuffer.data[0]         = (BYTE*)m_v4l2FIMCCaptureBuffers[FIMCdequeuedBufferNumber].cPlane[0];
-    m_videoBuffer.data[1]         = (BYTE*)m_v4l2FIMCCaptureBuffers[FIMCdequeuedBufferNumber].cPlane[1];
-    m_videoBuffer.data[2]         = (BYTE*)m_v4l2FIMCCaptureBuffers[FIMCdequeuedBufferNumber].cPlane[2];
-    m_videoBuffer.pts = (ptsTime.tv_sec + double(ptsTime.tv_usec)/1000); 
-    m_videoBuffer.dts = m_videoBuffer.pts;
-
-    if (!m_v4l2FIMCCaptureBuffers.QueueBuffer(FIMCdequeuedBufferNumber)) {
-      CLog::Log(LOGERROR, "%s::%s - FIMC CAPTURE Failed to queue buffer with index %d", CLASSNAME, __func__, FIMCdequeuedBufferNumber);
-      return VC_ERROR;
-    }
+    return DequeueBufferFromFIMC();
   }
-
-//  msg("Decode time: %d", XbmcThreads::SystemClockMillis() - dtime);
-  
-  return VC_PICTURE; // Picture is finally ready to be processed further
 }
