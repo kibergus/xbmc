@@ -43,6 +43,13 @@ public:
   virtual int Decode(BYTE* pData, int iSize, double dts, double pts);
 
 protected:
+  bool OpenDevices();
+  bool SetupCaptureFormat(int& MFCCapturePlane1Size, int& MFCCapturePlane2Size);
+  bool GetCaptureCrop();
+  bool ReturnBuffersToMFC();
+  int DequeueBufferFromFIMC();
+
+
   unsigned int m_iVideoWidth;
   unsigned int m_iVideoHeight;
   unsigned int m_iConvertedWidth;
@@ -56,16 +63,20 @@ protected:
   int m_iFIMCCapturePlane1Size;
   int m_iFIMCCapturePlane2Size;
   int m_iFIMCCapturePlane3Size;
-  
-  bool OpenDevices();
-  bool SetupCaptureFormat(int& MFCCapturePlane1Size, int& MFCCapturePlane2Size);
-  bool GetCaptureCrop();
-  bool ReturnBuffersToMFC();
-  int DequeueBufferFromFIMC();
 
-private:
+  int m_FIMCdequeuedBufferNumber;
+  bool m_isOddFrame;
+  int m_framesInMFC;
+
+  bool m_dataRequested;
+  
   // 2 begins to be slow.
-  static const size_t FIMC_CAPTURE_BUFFERS_CNT = 3;
+  static const size_t FIMC_CAPTURE_BUFFERS_CNT = 10;
+
+  // FIMC does not copy timestamp values between buffers
+  double m_pts[FIMC_CAPTURE_BUFFERS_CNT];
+  size_t m_ptsWriteIndex;
+  size_t m_ptsReadIndex;
 };
 
 #define memzero(x) memset(&(x), 0, sizeof (x))

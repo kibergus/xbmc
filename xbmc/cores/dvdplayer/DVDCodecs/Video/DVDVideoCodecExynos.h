@@ -44,9 +44,9 @@ protected:
   // compressed frame size. 1080p mpeg4 10Mb/s can be un to 786k in size, so this is to make sure frame fits into buffer
   static const size_t STREAM_BUFFER_SIZE = 786432;
   // 1 doesn't work at all
-  static const size_t MFC_OUTPUT_BUFFERS_CNT = 2;
+  static const size_t MFC_OUTPUT_BUFFERS_CNT = 5;
   // these are extra buffers, better keep their count as big as going to be simultaneous dequeued buffers number
-  static const size_t MFC_CAPTURE_EXTRA_BUFFER_CNT = 3;
+  static const size_t MFC_CAPTURE_EXTRA_BUFFER_CNT = 50;
 
   int m_decoderHandle;
 

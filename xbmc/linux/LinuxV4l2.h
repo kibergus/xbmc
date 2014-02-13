@@ -87,7 +87,7 @@ public:
 
   bool QueueBuffer(size_t index, const timeval& pts = {});
   // Returns dequeued buffer index or V4L2_ERROR in case of error
-  int DequeueBuffer(timeval& time, uint32_t& sequence);
+  int DequeueBuffer(uint32_t& sequence, timeval& time);
   // Searches for unused buffers or dequeues processed ones
   // Returns V4L2_ERROR, V4L2_BUSY or V4L2_OK
   int FindFreeBuffer(size_t& index);

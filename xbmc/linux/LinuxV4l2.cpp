@@ -378,7 +378,7 @@ bool Buffers::QueueBuffer(size_t index, const timeval& pts) {
   return true;
 }
 
-int Buffers::DequeueBuffer(timeval& time, uint32_t& sequence) {
+int Buffers::DequeueBuffer(uint32_t& sequence, timeval& time) {
   struct v4l2_plane  vplanes[V4L2_NUM_MAX_PLANES] = {};
 
   struct v4l2_buffer vbuf = {};
@@ -406,12 +406,20 @@ int Buffers::FindFreeBuffer(size_t& index) {
       return V4L2_OK;
     }
   }
+  timeval time;
+  uint32_t sequence;
+  index = DequeueBuffer(sequence, time);
+  if (int(index) >= 0) {
+    return V4L2_OK;
+  } else {
+    return V4L2_BUSY;
+  }
 
-  int ret = CLinuxV4l2::PollOutput(device_, 1000); // POLLIN - Capture, POLLOUT - Output
+  int ret = CLinuxV4l2::PollOutput(device_, 0); // POLLIN - Capture, POLLOUT - Output
   if (ret == V4L2_READY) {
     timeval time;
     uint32_t sequence;
-    index = DequeueBuffer(time, sequence);
+    index = DequeueBuffer(sequence, time);
     return V4L2_OK;
   } else if (ret != V4L2_BUSY) {
     CLog::Log(LOGERROR, "%s::%s - MFC OUTPUT\e[0m PollOutput error %d, errno %d", CLASSNAME, __func__, ret, errno);
