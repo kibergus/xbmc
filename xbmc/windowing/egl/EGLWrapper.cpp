@@ -86,6 +86,7 @@ bool CEGLWrapper::Initialize(const std::string &implementation)
     }
   }
 
+  #if defined(HAVE_EXYNOS4)
   if (!ret)
   {
     delete nativeGuess;
@@ -99,6 +100,7 @@ bool CEGLWrapper::Initialize(const std::string &implementation)
       }
     }
   }
+  #endif
 
   #if defined(TARGET_HYBRIS)
   if (!ret)                                                                                                                                                                                   
