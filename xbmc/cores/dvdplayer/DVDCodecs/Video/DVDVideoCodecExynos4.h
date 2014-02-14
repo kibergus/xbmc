@@ -26,6 +26,9 @@
 #include <string>
 #include <queue>
 #include <list>
+#include <atomic>
+#include <mutex>
+#include <thread>
 #include "guilib/GraphicContext.h"
 
 #ifndef V4L2_CAP_VIDEO_M2M_MPLANE
@@ -48,7 +51,7 @@ protected:
   bool GetCaptureCrop();
   bool ReturnBuffersToMFC();
   int DequeueBufferFromFIMC();
-
+  void MFCtoFIMCLoop();
 
   unsigned int m_iVideoWidth;
   unsigned int m_iVideoHeight;
@@ -65,13 +68,16 @@ protected:
   int m_iFIMCCapturePlane3Size;
 
   int m_FIMCdequeuedBufferNumber;
-  bool m_isOddFrame;
-  int m_framesInMFC;
+  std::atomic<bool> m_running;
+  std::mutex m_mutex;
+  std::thread m_thread;
+  bool m_buffering;
+  std::deque<int> m_FIMCdequeuedBuffers;
 
   bool m_dataRequested;
   
   // 2 begins to be slow.
-  static const size_t FIMC_CAPTURE_BUFFERS_CNT = 10;
+  static const size_t FIMC_CAPTURE_BUFFERS_CNT = 30;
 
   // FIMC does not copy timestamp values between buffers
   double m_pts[FIMC_CAPTURE_BUFFERS_CNT];

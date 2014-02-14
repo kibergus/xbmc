@@ -406,6 +406,7 @@ int Buffers::FindFreeBuffer(size_t& index) {
       return V4L2_OK;
     }
   }
+// FIXME This is a hackish. Busy loop instead of polling
   timeval time;
   uint32_t sequence;
   index = DequeueBuffer(sequence, time);
